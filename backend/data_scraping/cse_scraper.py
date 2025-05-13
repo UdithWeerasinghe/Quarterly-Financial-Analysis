@@ -29,7 +29,7 @@ COMPANIES = {
     "DIPD": "https://www.cse.lk/pages/company-profile/company-profile.component.html?symbol=DIPD.N0000",
     "REXP": "https://www.cse.lk/pages/company-profile/company-profile.component.html?symbol=REXP.N0000",
 }
-OUTPUT_DIR = "backend/data_collection/scraped_pdfs"
+OUTPUT_DIR = "backend/data_scraping/pdfs"
 HEADLESS = True
 DOWNLOAD_DELAY = 2
 

@@ -43,3 +43,4 @@ langchain-ollama
 langchain_community
 langchain-core
 langgraph
+pyyaml

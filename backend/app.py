@@ -2,12 +2,20 @@ from flask import Flask, jsonify, request, session
 from flask_cors import CORS
 import pandas as pd
 import os
+import sys
 import logging
-from rag_pipeline import RAGPipeline
+import re
+
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.llm_driven_query_system.rag import RAGPipeline
 from langgraph.graph import StateGraph, END
 from langchain_ollama.llms import OllamaLLM
 from typing import TypedDict, List, Any
 import uuid
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
 
 # Set up logging
 logging.basicConfig(
@@ -19,14 +27,19 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# Define base paths
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BACKEND_DIR, "dataset_creation", "cleaned_data")
+PDF_DIR = os.path.join(BACKEND_DIR, "data_scraping", "pdfs")
+
 # Load and prepare data
-df = pd.read_csv("backend/data_collection/quarterly_financials_cleaned.csv")
+df = pd.read_csv(os.path.join(DATA_DIR, "cleaned_quarterly_financials.csv"))
 df["TableDate"] = pd.to_datetime(df["TableDate"])
 df = df.sort_values("TableDate")
 
 # Initialize RAG pipeline
 try:
-    rag_pipeline = RAGPipeline()
+    pipeline = RAGPipeline()
     logger.info("RAG pipeline initialized successfully")
 except Exception as e:
     logger.error(f"Error initializing RAG pipeline: {str(e)}")
@@ -34,6 +47,22 @@ except Exception as e:
 
 # Initialize LLM
 llm = OllamaLLM(model="llama3.2:3b")
+
+# Create prompt template for the LLM
+prompt_template = PromptTemplate(
+    input_variables=["question", "context"],
+    template="""You are a helpful financial analyst assistant. Use the following context to answer the question.
+    If you cannot find the answer in the context, say so. Always format numbers with commas and specify LKR currency.
+    
+    Context: {context}
+    
+    Question: {question}
+    
+    Answer:"""
+)
+
+# Create LLM chain
+chain = LLMChain(llm=llm, prompt=prompt_template)
 
 # Define state types
 class GraphState(TypedDict):
@@ -45,7 +74,7 @@ class GraphState(TypedDict):
 # Define nodes
 def search_node(state: GraphState) -> GraphState:
     query = state.get("clarified_query", state["query"])
-    results = rag_pipeline.query(query)
+    results = pipeline.query(query)
     print("DEBUG: Search results for query:", query)
     for r in results:
         print(f"DEBUG: Result: {r}")
@@ -80,30 +109,15 @@ def generate_response_node(state: GraphState) -> GraphState:
         f"Year: {r.get('year', 'N/A')}\n"
         f"Quarter: {r.get('quarter', 'N/A')}\n"
         f"Quarter Period: {r.get('quarter_period', 'N/A')}\n"
-        + "\n".join([f"{metric}: {value:,.2f} LKR" for metric, value in r['metrics'].items()])
+        + "\n".join([
+            f"{metric}: {value:,.2f} LKR" if value is not None else f"{metric}: N/A"
+            for metric, value in r['metrics'].items()
+        ])
         for r in normalized_results
     ])
 
     # Generate response using LLM
-    prompt = f"""You are a financial analyst assistant. Use the following financial data to answer the question.
-If you can't answer with the given data, say so.
-
-Quarter Definitions:
-- Q1: January to March (ends March 31)
-- Q2: April to June (ends June 30)
-- Q3: July to September (ends September 30)
-- Q4: October to December (ends December 31)
-
-    Note: All values are in Sri Lankan Rupees (LKR) and needed to multiply by 1000 when giving the final answer.
-    
-    Question: {query}
-
-Financial Data:
-{context}
-
-Answer:"""
-
-    response = llm.invoke(prompt)
+    response = chain.run(question=query, context=context)
     return {**state, "final_response": response}
 
 # Create graph
@@ -241,6 +255,98 @@ def parse_query(question, user_context):
     quarter = extract_quarter(question) or user_context.get("last_quarter")
     year = extract_year(question) or user_context.get("last_year")
     return company, metric, quarter, year
+
+def extract_company(question):
+    """Extract company name from question."""
+    company_match = re.search(r'(REXP|DIPD)', question, re.IGNORECASE)
+    return company_match.group().upper() if company_match else None
+
+def extract_metric(question):
+    """Extract financial metric from question."""
+    metrics = ['Revenue', 'COGS', 'Gross Profit', 'Operating Expenses', 'Operating Income', 'Net Income']
+    for metric in metrics:
+        if metric.lower() in question.lower():
+            return metric
+    return None
+
+def extract_quarter(question):
+    """Extract quarter information from question."""
+    quarter_match = re.search(r'(1st|2nd|3rd|4th|Q[1-4])', question, re.IGNORECASE)
+    if quarter_match:
+        quarter = quarter_match.group().capitalize()
+        quarter_map = {
+            '1st': 'Q1', '2nd': 'Q2', '3rd': 'Q3', '4th': 'Q4',
+            'Q1': 'Q1', 'Q2': 'Q2', 'Q3': 'Q3', 'Q4': 'Q4'
+        }
+        return quarter_map.get(quarter)
+    return None
+
+def extract_year(question):
+    """Extract year from question."""
+    year_match = re.search(r'20\d{2}', question)
+    return int(year_match.group()) if year_match else None
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        data = request.json
+        question = data.get('question')
+        
+        if not question:
+            return jsonify({'error': 'No question provided'}), 400
+        
+        # Get relevant context from RAG pipeline
+        results = pipeline.query(question)
+        
+        if not results:
+            return jsonify({
+                'answer': "I couldn't find any relevant information to answer your question. Please try rephrasing or asking about a different time period.",
+                'context': "",
+                'raw_results': []
+            })
+        
+        # Format context from results
+        context = []
+        for result in results:
+            company = result.get('company') or result.get('Company')
+            date = result.get('date') or result.get('TableDate')
+            metrics = result.get('metrics') or {result.get('Metric'): result.get('Value')}
+            
+            context_entry = f"Company: {company}\nDate: {date}\n"
+            for metric, value in metrics.items():
+                if value is not None:
+                    context_entry += f"{metric}: {value:,.2f} LKR\n"
+            context.append(context_entry)
+        
+        context_str = "\n".join(context)
+        
+        try:
+            # Generate response using LLM
+            response = chain.run(question=question, context=context_str)
+            
+            return jsonify({
+                'answer': response,
+                'context': context_str,
+                'raw_results': results
+            })
+        except Exception as llm_error:
+            logger.error(f"Error generating LLM response: {str(llm_error)}")
+            return jsonify({
+                'answer': "I'm having trouble generating a response. Please try rephrasing your question.",
+                'context': context_str,
+                'raw_results': results
+            })
+        
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {str(e)}")
+        return jsonify({
+            'error': 'Failed to process your question. Please try again or rephrase your question.',
+            'details': str(e)
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'})
 
 if __name__ == "__main__":
     app.run(debug=True)

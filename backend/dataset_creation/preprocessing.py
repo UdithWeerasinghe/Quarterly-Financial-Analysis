@@ -14,9 +14,10 @@ Other possible data handling techniques:
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import os
 
-INPUT_FILE = "backend/data_collection/quarterly_financials.csv"
-OUTPUT_FILE = "backend/data_collection/quarterly_financials_cleaned.csv"
+INPUT_FILE = "backend/dataset_creation/extracted_tables/extracted_quarterly_financials.csv"
+OUTPUT_FILE = "backend/dataset_creation/cleaned_data/cleaned_quarterly_financials.csv"
 
 MAIN_METRICS = [
     "Revenue", "COGS", "Gross Profit", "Operating Expenses", "Operating Income", "Net Income"
@@ -82,6 +83,10 @@ def main():
                 last_good = vals_interp[~mask].iloc[-1] if (~mask).any() else np.nan
                 vals_interp.iloc[-1] = last_good
             df[metric] = vals_interp
+    # Ensure output directory exists
+    out_dir = os.path.dirname(OUTPUT_FILE)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     df.to_csv(OUTPUT_FILE, index=False)
     print(f"Cleaned/interpolated data saved to {OUTPUT_FILE}")
 

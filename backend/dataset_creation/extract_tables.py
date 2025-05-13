@@ -11,8 +11,8 @@ import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-PDF_ROOT = "backend/data_collection/scraped_pdfs"
-OUTPUT_FILE = "backend/data_collection/quarterly_financials.csv"
+PDF_ROOT = "backend/data_scraping/pdfs"
+OUTPUT_FILE = "backend/dataset_creation/extracted_tables/extracted_quarterly_financials.csv"
 
 INCOME_STATEMENT_NAMES = [
     "income statement", "consolidated income statement", "earnings statement", "revenue statement",

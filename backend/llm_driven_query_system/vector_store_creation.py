@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import faiss
@@ -6,11 +7,10 @@ import logging
 import pdfplumber
 import re
 from datetime import datetime
-import os
 from sentence_transformers import SentenceTransformer
 import pickle
 
-# Set up logging with more detail
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -28,13 +28,23 @@ class FinancialVectorStore:
             self.index = faiss.IndexFlatL2(self.embedding_dimension)
             # Store metadata
             self.metadata = []
+            
+            # Get module directory for embeddings
+            MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+            self.embeddings_dir = os.path.join(MODULE_DIR, "embeddings")
+            os.makedirs(self.embeddings_dir, exist_ok=True)
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
 
-    def save(self, index_path="backend/data/faiss_index.bin", metadata_path="backend/data/faiss_metadata.pkl"):
+    def save(self, index_path=None, metadata_path=None):
         """Save the FAISS index and metadata to disk."""
         try:
+            if index_path is None:
+                index_path = os.path.join(self.embeddings_dir, "faiss_index.bin")
+            if metadata_path is None:
+                metadata_path = os.path.join(self.embeddings_dir, "faiss_metadata.pkl")
+            
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(index_path), exist_ok=True)
             
@@ -52,9 +62,14 @@ class FinancialVectorStore:
             logger.error(f"Error saving vector store: {str(e)}")
             return False
 
-    def load(self, index_path="backend/data/faiss_index.bin", metadata_path="backend/data/faiss_metadata.pkl"):
+    def load(self, index_path=None, metadata_path=None):
         """Load the FAISS index and metadata from disk."""
         try:
+            if index_path is None:
+                index_path = os.path.join(self.embeddings_dir, "faiss_index.bin")
+            if metadata_path is None:
+                metadata_path = os.path.join(self.embeddings_dir, "faiss_metadata.pkl")
+            
             if not os.path.exists(index_path) or not os.path.exists(metadata_path):
                 logger.warning("No existing vector store found. Creating new one.")
                 return False
@@ -297,8 +312,8 @@ def create_vector_store(pdf_dir=None, csv_path=None, force_rebuild=False):
 if __name__ == "__main__":
     try:
         # Test the vector store
-        pdf_dir = Path("backend/data_collection/downloaded_pdfs")
-        csv_path = Path("backend/data_collection/quarterly_financials_cleaned.csv")
+        pdf_dir = Path("backend/data_scraping/pdfs")
+        csv_path = Path("backend/dataset_creation/cleaned_data/cleaned_quarterly_financials.csv")
         logger.info("Initializing vector store...")
         
         # Create or load vector store

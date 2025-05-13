@@ -11,7 +11,7 @@ from langchain.chains import LLMChain
 import pandas as pd
 import pdfplumber
 import pickle
-from vector_store import create_vector_store
+from backend.llm_driven_query_system.vector_store_creation import create_vector_store
 import re
 
 # Set up logging
@@ -25,10 +25,19 @@ class RAGPipeline:
     def __init__(self):
         """Initialize the RAG pipeline with a vector store."""
         try:
+            # Get module directory
+            MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+            BACKEND_DIR = os.path.dirname(os.path.dirname(MODULE_DIR))
+            
+            # Define paths relative to backend directory
+            pdf_dir = os.path.join(BACKEND_DIR, "data_scraping", "pdfs")
+            csv_path = os.path.join(BACKEND_DIR, "dataset_creation", "cleaned_data", "cleaned_quarterly_financials.csv")
+            
             # Create or load vector store
             self.vector_store = create_vector_store(
-                pdf_dir="backend/data_collection/downloaded_pdfs",
-                csv_path="backend/data_collection/quarterly_financials_cleaned.csv"
+                pdf_dir=pdf_dir,
+                csv_path=csv_path,
+                force_rebuild=False
             )
             logger.info("RAG pipeline initialized successfully")
         except Exception as e:
@@ -38,11 +47,19 @@ class RAGPipeline:
     def query(self, question: str, k: int = 10):
         """Query the RAG pipeline with a question."""
         try:
+            if not question or not isinstance(question, str):
+                logger.error("Invalid question format")
+                return []
+
             # Search for relevant documents
             results = self.vector_store.search(question, k=k)
             
+            if not results:
+                logger.info(f"No results found for query: {question}")
+                return []
+            
             # Try to extract year, quarter, company, and metric from the question
-            year_match = re.search(r'20\\d{2}', question)
+            year_match = re.search(r'20\d{2}', question)
             year = int(year_match.group()) if year_match else None
             quarter_match = re.search(r'(1st|2nd|3rd|4th|Q[1-4])', question, re.IGNORECASE)
             quarter_map = {'1st': 'Q1', '2nd': 'Q2', '3rd': 'Q3', '4th': 'Q4', 'Q1': 'Q1', 'Q2': 'Q2', 'Q3': 'Q3', 'Q4': 'Q4'}
@@ -55,15 +72,20 @@ class RAGPipeline:
             # Post-filter for exact match
             filtered = []
             for r in results:
-                if year and r.get('year') != year:
+                try:
+                    if year and r.get('year') != year:
+                        continue
+                    if quarter and r.get('quarter') != quarter:
+                        continue
+                    if company and (not r.get('company') or r.get('company').upper() != company):
+                        continue
+                    if metric and metric not in r.get('metrics', {}):
+                        continue
+                    filtered.append(r)
+                except Exception as e:
+                    logger.error(f"Error processing result: {str(e)}")
                     continue
-                if quarter and r.get('quarter') != quarter:
-                    continue
-                if company and (not r.get('company') or r.get('company').upper() != company):
-                    continue
-                if metric and metric not in r['metrics']:
-                    continue
-                filtered.append(r)
+
             # If nothing matches, fall back to original results
             return filtered if filtered else results
         except Exception as e:
@@ -104,7 +126,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
 
-from rag_pipeline import RAGPipeline
+from backend.llm_driven_query_system.rag import RAGPipeline
 pipeline = RAGPipeline()
 results = pipeline.query("What is the revenue of the 3rd quarter of 2022 for REXP?")
 print(results)

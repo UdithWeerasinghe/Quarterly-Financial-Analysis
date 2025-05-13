@@ -1,0 +1,11 @@
+companies:
+  - name: Dipped Products PLC
+    symbol: DIPD
+    url: "https://www.cse.lk/pages/company-profile/company-profile.component.html?symbol=DIPD.N0000"
+    report_pattern: "Interim_Financial_Statement"
+    table_keywords: ["Statement of Profit or Loss", "Income statements"]
+  - name: Richard Pieris Exports PLC
+    symbol: REXP
+    url: "https://www.cse.lk/pages/company-profile/company-profile.component.html?symbol=REXP.N0000"
+    report_pattern: "Interim_Financial_Statement"
+    table_keywords: ["Consolidated Income Statements", "Profit or Loss"]
