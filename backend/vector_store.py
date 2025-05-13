@@ -1,15 +1,14 @@
 import pandas as pd
 import numpy as np
 import faiss
-import torch
 from pathlib import Path
 import logging
 import pdfplumber
 import re
 from datetime import datetime
 import os
-import requests
-import json
+from sentence_transformers import SentenceTransformer
+import pickle
 
 # Set up logging with more detail
 logging.basicConfig(
@@ -19,53 +18,65 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class FinancialVectorStore:
-    def __init__(self, model_name="llama2"):
-        """Initialize the vector store with Ollama."""
+    def __init__(self, model_name="FinLang/finance-embeddings-investopedia"):
+        """Initialize the vector store with SentenceTransformers."""
         try:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Using device: {self.device}")
-            
-            # Initialize Ollama client
-            self.model_name = model_name
-            self.ollama_url = "http://localhost:11434/api/embeddings"
-            logger.info(f"Using Ollama model: {model_name}")
-            
-            # Test Ollama connection
-            try:
-                response = requests.post(
-                    self.ollama_url,
-                    json={"model": self.model_name, "prompt": "test"}
-                )
-                if response.status_code != 200:
-                    raise Exception(f"Ollama API returned status code {response.status_code}")
-                self.embedding_dimension = len(response.json()["embedding"])
-                logger.info(f"Successfully connected to Ollama. Embedding dimension: {self.embedding_dimension}")
-            except Exception as e:
-                logger.error(f"Failed to connect to Ollama: {str(e)}")
-                raise
-            
+            self.model = SentenceTransformer(model_name)
+            self.embedding_dimension = self.model.get_sentence_embedding_dimension()
+            logger.info(f"Using SentenceTransformer model: {model_name} (dim={self.embedding_dimension})")
             # Initialize FAISS index
             self.index = faiss.IndexFlatL2(self.embedding_dimension)
-            
             # Store metadata
             self.metadata = []
-            
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
 
-    def get_embedding(self, text):
-        """Get embedding from Ollama."""
+    def save(self, index_path="backend/data/faiss_index.bin", metadata_path="backend/data/faiss_metadata.pkl"):
+        """Save the FAISS index and metadata to disk."""
         try:
-            response = requests.post(
-                self.ollama_url,
-                json={"model": self.model_name, "prompt": text}
-            )
-            if response.status_code == 200:
-                return response.json()["embedding"]
-            else:
-                logger.error(f"Ollama API error: {response.text}")
-                return None
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(index_path), exist_ok=True)
+            
+            # Save FAISS index
+            faiss.write_index(self.index, index_path)
+            logger.info(f"Saved FAISS index to {index_path}")
+            
+            # Save metadata
+            with open(metadata_path, 'wb') as f:
+                pickle.dump(self.metadata, f)
+            logger.info(f"Saved metadata to {metadata_path}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving vector store: {str(e)}")
+            return False
+
+    def load(self, index_path="backend/data/faiss_index.bin", metadata_path="backend/data/faiss_metadata.pkl"):
+        """Load the FAISS index and metadata from disk."""
+        try:
+            if not os.path.exists(index_path) or not os.path.exists(metadata_path):
+                logger.warning("No existing vector store found. Creating new one.")
+                return False
+            
+            # Load FAISS index
+            self.index = faiss.read_index(index_path)
+            logger.info(f"Loaded FAISS index from {index_path}")
+            
+            # Load metadata
+            with open(metadata_path, 'rb') as f:
+                self.metadata = pickle.load(f)
+            logger.info(f"Loaded metadata from {metadata_path}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading vector store: {str(e)}")
+            return False
+
+    def get_embedding(self, text):
+        """Get embedding from SentenceTransformers."""
+        try:
+            return self.model.encode([text])[0]
         except Exception as e:
             logger.error(f"Error getting embedding: {str(e)}")
             return None
@@ -141,7 +152,7 @@ class FinancialVectorStore:
                     if i % 10 == 0:  # Log progress every 10 chunks
                         logger.info(f"Processing chunk {i+1}/{len(all_texts)}")
                     embedding = self.get_embedding(text)
-                    if embedding:
+                    if embedding is not None:
                         embeddings.append(embedding)
                     else:
                         logger.warning(f"Failed to get embedding for chunk {i+1}")
@@ -149,10 +160,8 @@ class FinancialVectorStore:
                 if embeddings:
                     # Add to FAISS index
                     self.index.add(np.array(embeddings).astype('float32'))
-                    
                     # Store metadata
                     self.metadata.extend(all_metadata)
-                    
                     logger.info(f"Created {len(embeddings)} embeddings from PDFs")
                 else:
                     logger.error("No embeddings were created successfully")
@@ -162,34 +171,75 @@ class FinancialVectorStore:
             logger.warning("No text chunks extracted from PDFs")
     
     def create_embeddings_from_csv(self, csv_path):
-        """Create embeddings from CSV data."""
+        """Create embeddings from CSV data, one per metric per row."""
         logger.info("Creating embeddings from CSV...")
-        
+        financial_metrics = ['Revenue', 'COGS', 'Gross Profit', 'Operating Expenses', 'Operating Income', 'Net Income']
         try:
             df = pd.read_csv(csv_path, parse_dates=["TableDate"])
+            all_texts = []
+            all_metadata = []
             
-            # Prepare texts
-            texts = [self.prepare_text(row) for _, row in df.iterrows()]
+            for idx, row in df.iterrows():
+                # Extract quarter information
+                date = pd.to_datetime(row['TableDate'])
+                month = date.month
+                
+                # Define quarters based on month
+                if month in [3, 6, 9, 12]:  # Quarter end months
+                    quarter = (month // 3)
+                    quarter_name = f"Q{quarter}"
+                    quarter_period = {
+                        3: "Q1 (January to March)",
+                        6: "Q2 (April to June)",
+                        9: "Q3 (July to September)",
+                        12: "Q4 (October to December)"
+                    }[month]
+                else:
+                    continue  # Skip non-quarter-end dates
+                
+                year = date.year
+                
+                for metric in financial_metrics:
+                    if metric in row:
+                        value = row[metric]
+                        text = (
+                            f"Company: {row['Company']}\n"
+                            f"Metric: {metric}\n"
+                            f"Date: {date.strftime('%Y-%m-%d')}\n"
+                            f"Year: {year}\n"
+                            f"Quarter: {quarter_name}\n"
+                            f"Quarter Period: {quarter_period}\n"
+                            f"Value: {value:,.2f} LKR\n"
+                            f"Note: All values are in Sri Lankan Rupees (LKR), and are in thousands."
+                        )
+                        all_texts.append(text)
+                        all_metadata.append({
+                            "Company": row['Company'],
+                            "Metric": metric,
+                            "TableDate": row['TableDate'],
+                            "Year": year,
+                            "Quarter": quarter,
+                            "QuarterName": quarter_name,
+                            "QuarterPeriod": quarter_period,
+                            "Value": value,
+                            "RowIdx": idx
+                        })
             
             # Create embeddings
             embeddings = []
-            for i, text in enumerate(texts):
-                if i % 10 == 0:  # Log progress every 10 rows
-                    logger.info(f"Processing row {i+1}/{len(texts)}")
+            for i, text in enumerate(all_texts):
+                if i % 10 == 0:
+                    logger.info(f"Processing metric chunk {i+1}/{len(all_texts)}")
                 embedding = self.get_embedding(text)
-                if embedding:
+                if embedding is not None:
                     embeddings.append(embedding)
                 else:
-                    logger.warning(f"Failed to get embedding for row {i+1}")
+                    logger.warning(f"Failed to get embedding for metric chunk {i+1}")
             
             if embeddings:
-                # Add to FAISS index
                 self.index.add(np.array(embeddings).astype('float32'))
-                
-                # Store metadata
-                self.metadata.extend(df.to_dict('records'))
-                
-                logger.info(f"Created {len(embeddings)} embeddings from CSV")
+                self.metadata.extend(all_metadata)
+                logger.info(f"Created {len(embeddings)} metric-specific embeddings from CSV")
             else:
                 logger.error("No embeddings were created successfully")
         except Exception as e:
@@ -203,12 +253,10 @@ class FinancialVectorStore:
             if query_embedding is None:
                 logger.error("Failed to get query embedding")
                 return []
-            
             # Search in FAISS
             distances, indices = self.index.search(
                 np.array([query_embedding]).astype('float32'), k
             )
-            
             # Return results with metadata
             results = []
             for idx, distance in zip(indices[0], distances[0]):
@@ -216,22 +264,30 @@ class FinancialVectorStore:
                     result = self.metadata[idx].copy()
                     result['similarity_score'] = float(1 / (1 + distance))
                     results.append(result)
-            
             return results
         except Exception as e:
             logger.error(f"Error during search: {str(e)}")
             return []
 
-def create_vector_store(pdf_dir=None, csv_path=None):
+def create_vector_store(pdf_dir=None, csv_path=None, force_rebuild=False):
     """Create and return a vector store from PDF and/or CSV data."""
     try:
         vector_store = FinancialVectorStore()
         
+        # Try to load existing vector store
+        if not force_rebuild and vector_store.load():
+            logger.info("Successfully loaded existing vector store")
+            return vector_store
+        
+        # If loading failed or force_rebuild is True, create new vector store
+        logger.info("Creating new vector store...")
         if pdf_dir:
             vector_store.create_embeddings_from_pdfs(pdf_dir)
-        
         if csv_path:
             vector_store.create_embeddings_from_csv(csv_path)
+        
+        # Save the newly created vector store
+        vector_store.save()
         
         return vector_store
     except Exception as e:
@@ -242,27 +298,29 @@ if __name__ == "__main__":
     try:
         # Test the vector store
         pdf_dir = Path("backend/data_collection/downloaded_pdfs")
-        csv_path = Path("backend/data_collection/quarterly_financials.csv")
-        
+        csv_path = Path("backend/data_collection/quarterly_financials_cleaned.csv")
         logger.info("Initializing vector store...")
+        
+        # Create or load vector store
         vector_store = create_vector_store(pdf_dir=pdf_dir, csv_path=csv_path)
         
         # Test search
         test_queries = [
-            "Show me the latest financial performance of Dipped Products",
-            "What was the revenue growth in the last quarter?",
-            "Compare the operating income between DIPD and REXP"
+            "What was DIPD's Revenue in the last quarter?",
+            "Show me the Gross Profit for REXP",
+            "Compare Operating Income between DIPD and REXP"
         ]
-        
         for query in test_queries:
             logger.info(f"\nTesting query: {query}")
             results = vector_store.search(query)
-            
             print(f"\nResults for query: {query}")
             for result in results:
-                print(f"\nCompany: {result['Company']}")
-                print(f"Date: {result['Date']}")
-                print(f"Report: {result['ReportName']}")
-                print(f"Similarity Score: {result['similarity_score']:.2f}")
+                print(f"\nCompany: {result.get('Company', 'N/A')}")
+                print(f"Date: {result.get('TableDate', 'N/A')}")
+                # Print all available financial metrics for this result
+                for metric in ['Revenue', 'COGS', 'Gross Profit', 'Operating Expenses', 'Operating Income', 'Net Income']:
+                    if metric in result:
+                        print(f"{metric}: {result[metric]:,.2f} LKR")
+                print(f"Similarity Score: {result.get('similarity_score', 0):.2f}")
     except Exception as e:
         logger.error(f"Error in main: {str(e)}") 

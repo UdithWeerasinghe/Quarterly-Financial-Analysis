@@ -143,7 +143,13 @@ const MetricsChart = ({
     responsive: true,
     plugins: {
       legend: { position: 'top', labels: { color: axisColor } },
-      title: { display: true, text: `${metric} Over Time`, color: axisColor },
+      title: {
+        display: true,
+        text: `${metric} Over Time`,
+        font: {
+          size: 16
+        }
+      },
       tooltip: {
         enabled: true,
         backgroundColor: bgColor,
@@ -205,7 +211,14 @@ const MetricsChart = ({
       y: {
         beginAtZero: true,
         ticks: { color: axisColor },
-        grid: { color: gridColor }
+        grid: { color: gridColor },
+        title: {
+          display: true,
+          text: "Rs. '000",
+          font: {
+            size: 14
+          }
+        }
       },
     },
   };

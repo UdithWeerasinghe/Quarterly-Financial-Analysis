@@ -7,6 +7,7 @@ import camelot
 import tabula
 import pdfplumber
 from thefuzz import process
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -131,24 +132,40 @@ def extract_y_label(header_lines):
 
 
 def find_table_date(pdf_path):
-    TABLE_DATE_RE = re.compile(r"(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})", re.IGNORECASE)
-    with pdfplumber.open(pdf_path) as pdf:
-        text = '\n'.join(page.extract_text() or '' for page in pdf.pages[:2])
+    # Patterns for quarter/period end dates
+    QUARTER_ENDS = [(3, 31), (6, 30), (9, 30), (12, 31)]
+    TABLE_DATE_RE = re.compile(
+        r"(\d{1,2})(?:st|nd|rd|th)?[\s/-]+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)[\s/-]+(\d{4})",
+        re.IGNORECASE
+    )
+    MONTHS = {m: i+1 for i, m in enumerate(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])}
+    MONTHS.update({m: i+1 for i, m in enumerate(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'])})
     candidates = []
-    for m in TABLE_DATE_RE.findall(text):
-        clean = re.sub(r"(st|nd|rd|th)", "", m, flags=re.IGNORECASE)
-        for fmt in ["%d %B %Y", "%d %b %Y"]:
-            try:
-                candidates.append(datetime.strptime(clean.strip(), fmt).date())
-            except:
-                pass
-    for pat, fmt in [(r"\d{2}-\d{2}-\d{4}", "%d-%m-%Y"), (r"\d{4}-\d{2}-\d{2}", "%Y-%m-%d")]:
-        for m in re.findall(pat, text):
-            try:
-                candidates.append(datetime.strptime(m, fmt).date())
-            except:
-                pass
-    return max(candidates) if candidates else None
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            for m in TABLE_DATE_RE.findall(text):
+                day, month, year = m
+                month_num = MONTHS.get(month[:3].capitalize(), None)
+                if month_num:
+                    try:
+                        d = datetime(int(year), int(month_num), int(day))
+                        # Only accept quarter ends
+                        if (d.month, d.day) in QUARTER_ENDS:
+                            candidates.append(d.date())
+                    except:
+                        pass
+    if candidates:
+        return max(candidates)
+    # Fallback: use report date and pick closest previous quarter end
+    report_date = parse_date_from_filename(os.path.basename(pdf_path))
+    if report_date:
+        year = report_date.year
+        q_ends = [datetime(year, m, d).date() for m, d in QUARTER_ENDS]
+        q_ends = [d for d in q_ends if d <= report_date]
+        if q_ends:
+            return max(q_ends)
+    return None
 
 
 def parse_page3_metrics(text, company="DIPD"):
@@ -175,14 +192,29 @@ def parse_page3_metrics(text, company="DIPD"):
 
 def extract_all_metrics(pdf_path, company, table_date):
     if company == "DIPD":
+        # Search all pages for income statement tables
         with pdfplumber.open(pdf_path) as pdf:
-            if len(pdf.pages) < 3:
-                logging.warning(f"PDF <3 pages: {pdf_path}")
-                return {k: 0.0 for k in OUTPUT_METRICS}, ""
-            page3 = pdf.pages[2].extract_text() or ""
-        found = parse_page3_metrics(page3, company)
-        metrics = {m: found.get(m, 0.0) for m in OUTPUT_METRICS}
-        return metrics, "Rs.'000"
+            found_metrics = {}
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                lines = text.splitlines()
+                for idx, line in enumerate(lines):
+                    lwr = line.strip().lower()
+                    # Check if this line is a valid income statement header
+                    if any(name in lwr for name in INCOME_STATEMENT_NAMES):
+                        # Avoid tables under unwanted headers
+                        if any(x in lwr for x in ["other comprehensive income", "statement of financial position", "statements of changes in equity"]):
+                            continue
+                        # Extract the table below this header (next ~20 lines)
+                        table_lines = lines[idx+1:idx+21]
+                        table_text = "\n".join(table_lines)
+                        page_metrics = parse_page3_metrics(table_text, company)
+                        # Merge found metrics, prefer first nonzero value
+                        for k, v in page_metrics.items():
+                            if k not in found_metrics or found_metrics[k] == 0.0:
+                                found_metrics[k] = v
+            metrics = {m: found_metrics.get(m, 0.0) for m in OUTPUT_METRICS}
+            return metrics, "Rs.'000"
 
     # REXP and others: robust table extraction
     page_idx, heading_idx = find_income_statement_table(pdf_path)
@@ -271,15 +303,31 @@ def extract_all_metrics(pdf_path, company, table_date):
 
 
 def calculate_derived_metrics(metrics, company):
+    # Always store absolute values for expenses/costs/COGS
+    for key in ["COGS", "Distribution Costs", "Administrative Expenses", "Other Expenses", "Other Operating Expense"]:
+        if key in metrics:
+            metrics[key] = abs(metrics[key]) if metrics[key] is not None else 0
     if company == "DIPD":
-        op = metrics.get("Distribution Costs",0)+metrics.get("Administrative Expenses",0)+metrics.get("Other Expenses",0)
-        metrics["Operating Expenses"]=op
-        metrics["Operating Income"]=metrics.get("Gross Profit",0)+metrics.get("Other Income",0)-op
-    elif company=="REXP":
-        op = metrics.get("Distribution Costs",0)+metrics.get("Administrative Expenses",0)+metrics.get("Other Operating Expense",0)
-        metrics["Operating Expenses"]=op
-        if metrics.get("Operating Income",0)==0:
-            metrics["Operating Income"]=metrics.get("Gross Profit",0)+metrics.get("Other Income",0)-op
+        dist = metrics.get("Distribution Costs", 0) or 0
+        admin = metrics.get("Administrative Expenses", 0) or 0
+        other = metrics.get("Other Expenses", 0) or 0
+        op_exp = dist + admin + other
+        metrics["Operating Expenses"] = op_exp
+        gross = metrics.get("Gross Profit", 0) or 0
+        other_income = metrics.get("Other Income", 0) or 0
+        metrics["Operating Income"] = gross + other_income - op_exp
+    elif company == "REXP":
+        dist = metrics.get("Distribution Costs", 0) or 0
+        admin = metrics.get("Administrative Expenses", 0) or 0
+        other_op = metrics.get("Other Operating Expense", 0) or 0
+        op_exp = dist + admin + other_op
+        metrics["Operating Expenses"] = op_exp
+        gross = metrics.get("Gross Profit", 0) or 0
+        other_income = metrics.get("Other Income", 0) or 0
+        metrics["Operating Income"] = gross + other_income - op_exp
+    # Ensure Operating Income is always positive in the output
+    if "Operating Income" in metrics:
+        metrics["Operating Income"] = abs(metrics["Operating Income"]) if metrics["Operating Income"] is not None else 0
     return metrics
 
 

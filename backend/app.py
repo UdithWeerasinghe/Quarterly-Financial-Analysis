@@ -1,125 +1,177 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 from flask_cors import CORS
 import pandas as pd
 import os
 import logging
-from rag_pipeline import FinancialRAG
+from rag_pipeline import RAGPipeline
 from langgraph.graph import StateGraph, END
 from langchain_ollama.llms import OllamaLLM
 from typing import TypedDict, List, Any
+import uuid
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# Update the path to use the correct relative path
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data_collection", "quarterly_financials.csv")
-df = pd.read_csv(DATA_PATH, parse_dates=["TableDate"], dayfirst=True)
+# Load and prepare data
+df = pd.read_csv("backend/data_collection/quarterly_financials_cleaned.csv")
+df["TableDate"] = pd.to_datetime(df["TableDate"])
 df = df.sort_values("TableDate")
 
-# Initialize the RAG pipeline and LLM
-rag = FinancialRAG()
-if not rag.load_index("faiss.index", "faiss_meta.pkl"):
-    rag.build_index_from_pdfs("backend/data_collection/downloaded_pdfs")
-    rag.build_index_from_csv("backend/data_collection/quarterly_financials.csv")
-    rag.save_index("faiss.index", "faiss_meta.pkl")
+# Initialize RAG pipeline
+try:
+    rag_pipeline = RAGPipeline()
+    logger.info("RAG pipeline initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing RAG pipeline: {str(e)}")
+    raise
+
+# Initialize LLM
 llm = OllamaLLM(model="llama3.2:3b")
 
-# --- LangGraph Agentic Pipeline ---
-class AgentState(TypedDict, total=False):
+# Define state types
+class GraphState(TypedDict):
     query: str
     clarified_query: str
     search_results: List[Any]
     final_response: str
 
-def clarify_node(state):
-    query = state["query"]
-    if len(query.split()) < 3:
-        prompt = f"Expand this user query for a financial assistant: '{query}'"
-        try:
-            expanded = llm.invoke(prompt)
-            if expanded and isinstance(expanded, str):
-                query = expanded.strip()
-        except Exception:
-            pass
-    return {**state, "clarified_query": query}
-
-def search_node(state):
+# Define nodes
+def search_node(state: GraphState) -> GraphState:
     query = state.get("clarified_query", state["query"])
-    results = rag.search(query, k=5)
+    results = rag_pipeline.query(query)
     print("DEBUG: Search results for query:", query)
     for r in results:
-        print("  -", r.get("text", "")[:100])
+        print(f"DEBUG: Result: {r}")
     return {**state, "search_results": results}
 
-def response_node(state):
-    results = state.get("search_results", [])
+def generate_response_node(state: GraphState) -> GraphState:
+    results = state["search_results"]
     query = state.get("clarified_query", state["query"])
+
     if not results:
         return {**state, "final_response": "Sorry, I couldn't find any relevant information for your question."}
-    context = "\n\n".join([f"Document {i+1}:\n{r['text']}" for i, r in enumerate(results)])
-    answer = rag.generate_response(query, context)
-    return {**state, "final_response": answer}
 
-graph = StateGraph(AgentState)
-graph.add_node("clarify_query", clarify_node)
-graph.add_node("search_vectorstore", search_node)
-graph.add_node("generate_response", response_node)
-graph.add_edge("clarify_query", "search_vectorstore")
-graph.add_edge("search_vectorstore", "generate_response")
-graph.add_edge("generate_response", END)
-graph.set_entry_point("clarify_query")
-pipeline = graph.compile()
+    # Use the same normalize_result function as in your API
+    def normalize_result(result):
+        metrics = result.get('metrics') or {result.get('Metric'): result.get('Value')}
+        metrics_lkr = {k: v * 1000 if v is not None else None for k, v in metrics.items()}
+        return {
+            "company": result.get('company') or result.get('Company'),
+            "date": result.get('date') or result.get('TableDate'),
+            "year": result.get('year') or result.get('Year'),
+            "quarter": result.get('quarter') or result.get('QuarterName') or result.get('Quarter'),
+            "quarter_period": result.get('quarter_period') or result.get('QuarterPeriod'),
+            "metrics": metrics_lkr
+        }
 
-def run_agentic_pipeline(query):
-    state = {"query": query}
-    result = pipeline.invoke(state)
-    return result["final_response"]
+    normalized_results = [normalize_result(r) for r in results]
 
-def get_relevant_context(question):
-    """Extract relevant financial data based on the question."""
+    # Format results for LLM
+    context = "\n\n".join([
+        f"Company: {r['company']}\n"
+        f"Date: {r['date']}\n"
+        f"Year: {r.get('year', 'N/A')}\n"
+        f"Quarter: {r.get('quarter', 'N/A')}\n"
+        f"Quarter Period: {r.get('quarter_period', 'N/A')}\n"
+        + "\n".join([f"{metric}: {value:,.2f} LKR" for metric, value in r['metrics'].items()])
+        for r in normalized_results
+    ])
+
+    # Generate response using LLM
+    prompt = f"""You are a financial analyst assistant. Use the following financial data to answer the question.
+If you can't answer with the given data, say so.
+
+Quarter Definitions:
+- Q1: January to March (ends March 31)
+- Q2: April to June (ends June 30)
+- Q3: July to September (ends September 30)
+- Q4: October to December (ends December 31)
+
+    Note: All values are in Sri Lankan Rupees (LKR) and needed to multiply by 1000 when giving the final answer.
+    
+    Question: {query}
+
+Financial Data:
+{context}
+
+Answer:"""
+
+    response = llm.invoke(prompt)
+    return {**state, "final_response": response}
+
+# Create graph
+workflow = StateGraph(GraphState)
+
+# Add nodes
+workflow.add_node("search", search_node)
+workflow.add_node("generate_response", generate_response_node)
+
+# Add edges
+workflow.add_edge("search", "generate_response")
+workflow.add_edge("generate_response", END)
+workflow.set_entry_point("search")
+
+# Compile graph
+graph = workflow.compile()
+
+def normalize_result(result):
+    # Get the metrics dictionary (or create one from Metric/Value)
+    metrics = result.get('metrics') or {result.get('Metric'): result.get('Value')}
+    # Multiply all values by 1000 and format as LKR
+    metrics_lkr = {k: v * 1000 if v is not None else None for k, v in metrics.items()}
+    return {
+        "company": result.get('company') or result.get('Company'),
+        "date": result.get('date') or result.get('TableDate'),
+        "year": result.get('year') or result.get('Year'),
+        "quarter": result.get('quarter') or result.get('QuarterName') or result.get('Quarter'),
+        "quarter_period": result.get('quarter_period') or result.get('QuarterPeriod'),
+        "metrics": metrics_lkr
+    }
+
+# At the top of your app.py
+user_sessions = {}
+
+@app.route("/api/query", methods=["POST"])
+def query():
+    session_id = request.json.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    user_context = user_sessions.get(session_id, {})
     try:
-        context = []
-        # Extract company names from the question
-        companies = [company for company in df["Company"].unique() 
-                    if company.lower() in question.lower()]
-        # Extract metrics from the question
-        metrics = ['revenue', 'profit', 'margin', 'ratio', 'growth', 'income']
-        relevant_metrics = [metric for metric in metrics 
-                           if metric.lower() in question.lower()]
-        # Get relevant data
-        for company in companies:
-            company_data = df[df["Company"] == company]
-            if not relevant_metrics:  # If no specific metrics mentioned, get all data
-                context.append(f"{company} data:\n{company_data.to_string()}\n")
-            else:
-                # Filter for relevant metrics
-                metric_cols = [col for col in company_data.columns 
-                             if any(metric in col.lower() for metric in relevant_metrics)]
-                if metric_cols:
-                    context.append(f"{company} data:\n{company_data[metric_cols].to_string()}\n")
-        return "\n".join(context)
+        data = request.get_json()
+        question = data.get('question')
+        
+        if not question:
+            return jsonify({'error': 'No question provided'}), 400
+        
+        # Run the graph
+        result = graph.invoke({"query": question})
+        results = result['search_results']
+        normalized_results = [normalize_result(r) for r in results]
+        
+        # After answering:
+        user_sessions[session_id] = {
+            "last_company": normalized_results[0]["company"],
+            "last_metric": list(normalized_results[0]["metrics"].keys())[0],
+            "last_quarter": normalized_results[0]["quarter"],
+            "last_year": normalized_results[0]["year"],
+            # ... any other context ...
+        }
+        return jsonify({
+            'response': result['final_response'],
+            'results': normalized_results,
+            'session_id': session_id
+        })
     except Exception as e:
-        logger.error(f"Error in get_relevant_context: {str(e)}")
-        raise
-
-@app.route("/api/chat", methods=["POST"])
-def chat():
-    try:
-        data = request.json
-        if not data or "message" not in data:
-            return jsonify({"error": "No message provided"}), 400
-        question = data.get("message", "")
-        logger.info(f"Received question: {question}")
-        answer = run_agentic_pipeline(question)
-        logger.info(f"Generated answer: {answer[:200]}...")
-        return jsonify({"response": answer})
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error processing query: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route("/")
 def home():
@@ -180,6 +232,15 @@ def ratios():
         dff["Operating Margin"] = dff["Operating Income"] / dff["Revenue"] * 100
         dff["Net Margin"] = dff["Net Income"] / dff["Revenue"] * 100
         return dff[["TableDate", "Gross Margin", "Operating Margin", "Net Margin"]].to_json(orient="records", date_format="iso")
+
+def parse_query(question, user_context):
+    # Try to extract company, metric, quarter, year from question
+    # If missing, use from user_context
+    company = extract_company(question) or user_context.get("last_company")
+    metric = extract_metric(question) or user_context.get("last_metric")
+    quarter = extract_quarter(question) or user_context.get("last_quarter")
+    year = extract_year(question) or user_context.get("last_year")
+    return company, metric, quarter, year
 
 if __name__ == "__main__":
     app.run(debug=True)

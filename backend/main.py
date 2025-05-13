@@ -119,7 +119,7 @@ async def startup_event():
         rag = FinancialRAG()
         # Build indices
         pdf_dir = "backend/data_collection/downloaded_pdfs"
-        csv_path = "backend/data_collection/quarterly_financials.csv"
+        csv_path = "backend/data_collection/quarterly_financials_cleaned.csv"
         
         if rag.build_index_from_pdfs(pdf_dir):
             logger.info("Successfully built PDF index")

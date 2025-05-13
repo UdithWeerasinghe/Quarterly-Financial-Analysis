@@ -11,6 +11,8 @@ from langchain.chains import LLMChain
 import pandas as pd
 import pdfplumber
 import pickle
+from vector_store import create_vector_store
+import re
 
 # Set up logging
 logging.basicConfig(
@@ -19,299 +21,104 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class FinancialRAG:
-    def __init__(self, model_name="llama3.2:3b"):
-        """Initialize the RAG pipeline with Ollama and FAISS."""
-        self.model_name = model_name
-        self.ollama_url = "http://localhost:11434/api"
-        self.llm = OllamaLLM(model=model_name)
-        
-        # Initialize FAISS index
-        self.index = None
-        self.documents = []
-        self.embedding_dimension = None
-        
-        # Test Ollama connection
-        self._test_ollama_connection()
-        
-    def _test_ollama_connection(self):
-        """Test connection to Ollama."""
+class RAGPipeline:
+    def __init__(self):
+        """Initialize the RAG pipeline with a vector store."""
         try:
-            response = requests.post(
-                f"{self.ollama_url}/embeddings",
-                json={"model": self.model_name, "prompt": "test"}
+            # Create or load vector store
+            self.vector_store = create_vector_store(
+                pdf_dir="backend/data_collection/downloaded_pdfs",
+                csv_path="backend/data_collection/quarterly_financials_cleaned.csv"
             )
-            if response.status_code != 200:
-                raise Exception(f"Ollama API returned status code {response.status_code}")
-            self.embedding_dimension = len(response.json()["embedding"])
-            logger.info(f"Successfully connected to Ollama. Embedding dimension: {self.embedding_dimension}")
+            logger.info("RAG pipeline initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to connect to Ollama: {str(e)}")
+            logger.error(f"Error initializing RAG pipeline: {str(e)}")
             raise
 
-    def get_embedding(self, text):
-        """Get embedding from Ollama."""
-        try:
-            response = requests.post(
-                f"{self.ollama_url}/embeddings",
-                json={"model": self.model_name, "prompt": text}
-            )
-            if response.status_code == 200:
-                return response.json()["embedding"]
-            else:
-                logger.error(f"Ollama API error: {response.text}")
-                return None
-        except Exception as e:
-            logger.error(f"Error getting embedding: {str(e)}")
-            return None
-
-    def extract_text_from_pdf(self, pdf_path):
-        """Extract text from PDF and split into chunks."""
-        chunks = []
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text()
-                    if text:
-                        # Split text into smaller chunks
-                        paragraphs = text.split('\n\n')
-                        for para in paragraphs:
-                            if len(para.strip()) > 50:  # Only keep substantial chunks
-                                chunks.append(para.strip())
-        except Exception as e:
-            logger.error(f"Error processing {pdf_path}: {str(e)}")
-        return chunks
-
-    def prepare_document(self, text, metadata):
-        """Prepare a document for indexing."""
-        return {
-            "text": text,
-            "metadata": metadata
-        }
-
-    def build_index_from_pdfs(self, pdf_dir):
-        """Build FAISS index from PDF files."""
-        logger.info("Building index from PDFs...")
-        
-        pdf_dir = Path(pdf_dir)
-        if not pdf_dir.exists():
-            logger.error(f"PDF directory not found: {pdf_dir}")
-            return
-        
-        documents = []
-        
-        # Process each PDF file
-        for pdf_file in pdf_dir.glob("**/*.pdf"):
-            logger.info(f"Processing {pdf_file.name}")
-            
-            # Extract company name from directory structure
-            company = pdf_file.parent.name
-            date = pdf_file.stem.split('_')[0] if '_' in pdf_file.stem else "Unknown"
-            
-            # Extract text chunks from PDF
-            chunks = self.extract_text_from_pdf(pdf_file)
-            
-            # Create documents with metadata
-            for chunk in chunks:
-                metadata = {
-                    'Company': company,
-                    'Date': date,
-                    'ReportName': pdf_file.name,
-                    'Source': 'PDF'
-                }
-                documents.append(self.prepare_document(chunk, metadata))
-        
-        if documents:
-            self._build_faiss_index(documents)
-        else:
-            logger.warning("No documents extracted from PDFs")
-
-    def build_index_from_csv(self, csv_path):
-        """Build FAISS index from CSV data."""
-        logger.info("Building index from CSV...")
-        
-        try:
-            df = pd.read_csv(csv_path, parse_dates=["TableDate"])
-            
-            documents = []
-            for _, row in df.iterrows():
-                # Create a text representation of the row
-                text = f"""
-                Company: {row['Company']}
-                Date: {row['TableDate']}
-                Revenue: {row.get('Revenue', 'N/A')}
-                Gross Profit: {row.get('Gross Profit', 'N/A')}
-                Operating Income: {row.get('Operating Income', 'N/A')}
-                Net Income: {row.get('Net Income', 'N/A')}
-                """.strip()
-                
-                metadata = row.to_dict()
-                documents.append(self.prepare_document(text, metadata))
-            
-            if documents:
-                self._build_faiss_index(documents)
-            else:
-                logger.warning("No documents created from CSV")
-                
-        except Exception as e:
-            logger.error(f"Error processing CSV: {str(e)}")
-
-    def _build_faiss_index(self, documents):
-        """Build FAISS index from documents."""
-        try:
-            # Get embeddings for all documents
-            embeddings = []
-            for i, doc in enumerate(documents):
-                if i % 10 == 0:  # Log progress every 10 documents
-                    logger.info(f"Processing document {i+1}/{len(documents)}")
-                embedding = self.get_embedding(doc["text"])
-                if embedding:
-                    embeddings.append(embedding)
-                else:
-                    logger.warning(f"Failed to get embedding for document {i+1}")
-            
-            if embeddings:
-                # Create FAISS index
-                self.index = faiss.IndexFlatL2(self.embedding_dimension)
-                self.index.add(np.array(embeddings).astype('float32'))
-                self.documents = documents
-                logger.info(f"Built FAISS index with {len(embeddings)} documents")
-            else:
-                logger.error("No embeddings were created successfully")
-                
-        except Exception as e:
-            logger.error(f"Error building FAISS index: {str(e)}")
-
-    def search(self, query, k=5):
-        """Search for similar documents."""
-        if not self.index:
-            logger.error("FAISS index not built")
-            return []
-        
-        try:
-            # Get query embedding
-            query_embedding = self.get_embedding(query)
-            if query_embedding is None:
-                logger.error("Failed to get query embedding")
-                return []
-            
-            # Search in FAISS
-            distances, indices = self.index.search(
-                np.array([query_embedding]).astype('float32'), k
-            )
-            
-            # Return results with metadata
-            results = []
-            for idx, distance in zip(indices[0], distances[0]):
-                if idx != -1:  # FAISS returns -1 for empty slots
-                    result = self.documents[idx].copy()
-                    result['similarity_score'] = float(1 / (1 + distance))
-                    results.append(result)
-            
-            return results
-        except Exception as e:
-            logger.error(f"Error during search: {str(e)}")
-            return []
-
-    def generate_response(self, query, context):
-        """Generate a response using the LLM."""
-        try:
-            # Create prompt template
-            template = """
-            You are a financial analyst assistant. Use the following context to answer the question.
-            
-            Context:
-            {context}
-            
-            Question: {query}
-            
-            Answer:
-            """
-            
-            prompt = PromptTemplate(
-                input_variables=["context", "query"],
-                template=template
-            )
-            
-            # Create chain
-            chain = LLMChain(llm=self.llm, prompt=prompt)
-            
-            # Generate response
-            response = chain.run(context=context, query=query)
-            
-            return response
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return "I apologize, but I encountered an error while generating the response."
-
-    def query(self, user_query, k=3):
-        """Query the RAG system."""
+    def query(self, question: str, k: int = 10):
+        """Query the RAG pipeline with a question."""
         try:
             # Search for relevant documents
-            results = self.search(user_query, k=k)
+            results = self.vector_store.search(question, k=k)
             
-            if not results:
-                return "I couldn't find any relevant information to answer your question."
-            
-            # Prepare context from results
-            context = "\n\n".join([
-                f"Document {i+1}:\n{result['text']}\nRelevance: {result['similarity_score']:.2f}"
-                for i, result in enumerate(results)
-            ])
-            
-            # Generate response
-            response = self.generate_response(user_query, context)
-            
-            return response
+            # Try to extract year, quarter, company, and metric from the question
+            year_match = re.search(r'20\\d{2}', question)
+            year = int(year_match.group()) if year_match else None
+            quarter_match = re.search(r'(1st|2nd|3rd|4th|Q[1-4])', question, re.IGNORECASE)
+            quarter_map = {'1st': 'Q1', '2nd': 'Q2', '3rd': 'Q3', '4th': 'Q4', 'Q1': 'Q1', 'Q2': 'Q2', 'Q3': 'Q3', 'Q4': 'Q4'}
+            quarter = quarter_map[quarter_match.group().capitalize()] if quarter_match else None
+            company_match = re.search(r'REXP|DIPD', question, re.IGNORECASE)
+            company = company_match.group().upper() if company_match else None
+            metric_match = re.search(r'Revenue|COGS|Gross Profit|Operating Expenses|Operating Income|Net Income', question, re.IGNORECASE)
+            metric = metric_match.group() if metric_match else None
+
+            # Post-filter for exact match
+            filtered = []
+            for r in results:
+                if year and r.get('year') != year:
+                    continue
+                if quarter and r.get('quarter') != quarter:
+                    continue
+                if company and (not r.get('company') or r.get('company').upper() != company):
+                    continue
+                if metric and metric not in r['metrics']:
+                    continue
+                filtered.append(r)
+            # If nothing matches, fall back to original results
+            return filtered if filtered else results
         except Exception as e:
-            logger.error(f"Error in query: {str(e)}")
-            return "I apologize, but I encountered an error while processing your query."
+            logger.error(f"Error querying RAG pipeline: {str(e)}")
+            return []
 
-    def save_index(self, index_path="faiss.index", meta_path="faiss_meta.pkl"):
-        if self.index is not None:
-            faiss.write_index(self.index, index_path)
-            with open(meta_path, "wb") as f:
-                pickle.dump(self.documents, f)
-            print(f"FAISS index and metadata saved to {index_path} and {meta_path}")
+    def normalize_result(self, result):
+        return {
+            "company": result.get('company') or result.get('Company'),
+            "date": result.get('date') or result.get('TableDate'),
+            "year": result.get('year') or result.get('Year'),
+            "quarter": result.get('quarter') or result.get('QuarterName') or result.get('Quarter'),
+            "quarter_period": result.get('quarter_period') or result.get('QuarterPeriod'),
+            "metrics": result.get('metrics') or {result.get('Metric'): result.get('Value')}
+        }
 
-    def load_index(self, index_path="faiss.index", meta_path="faiss_meta.pkl"):
-        if os.path.exists(index_path) and os.path.exists(meta_path):
-            self.index = faiss.read_index(index_path)
-            with open(meta_path, "rb") as f:
-                self.documents = pickle.load(f)
-            print(f"FAISS index and metadata loaded from {index_path} and {meta_path}")
-            return True
-        return False
-
-def main():
+if __name__ == "__main__":
+    # Test the RAG pipeline
     try:
-        # Initialize RAG system
-        rag = FinancialRAG()
-        
-        # Build indices
-        pdf_dir = Path("backend/data_collection/downloaded_pdfs")
-        csv_path = Path("backend/data_collection/quarterly_financials.csv")
-        
-        if pdf_dir.exists():
-            rag.build_index_from_pdfs(pdf_dir)
-        
-        if csv_path.exists():
-            rag.build_index_from_csv(csv_path)
-        
-        # Test queries
-        test_queries = [
-            "What was the latest revenue for Dipped Products?",
-            "Compare the operating income between DIPD and REXP",
-            "Show me the financial performance trends for the last quarter"
+        pipeline = RAGPipeline()
+        test_questions = [
+            "What was DIPD's Revenue in the last quarter?",
+            "Show me the Gross Profit for REXP",
+            "Compare Operating Income between DIPD and REXP",
+            "What is the revenue of the 3rd quarter of 2022 for REXP"
         ]
         
-        for query in test_queries:
-            print(f"\nQuery: {query}")
-            response = rag.query(query)
-            print(f"Response: {response}")
-            
+        for question in test_questions:
+            print(f"\nQuestion: {question}")
+            results = pipeline.query(question)
+            for result in results:
+                company = result.get('company') or result.get('Company')
+                date = result.get('date') or result.get('TableDate')
+                print(f"\nCompany: {company}")
+                print(f"Date: {date}")
+                for metric, value in (result.get('metrics') or {result.get('Metric'): result.get('Value')}).items():
+                    print(f"{metric}: {value:,.2f} LKR")
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
 
-if __name__ == "__main__":
-    main() 
+from rag_pipeline import RAGPipeline
+pipeline = RAGPipeline()
+results = pipeline.query("What is the revenue of the 3rd quarter of 2022 for REXP?")
+print(results)
+
+def normalize_result(result):
+    return {
+        "company": result.get('company') or result.get('Company'),
+        "date": result.get('date') or result.get('TableDate'),
+        "year": result.get('year') or result.get('Year'),
+        "quarter": result.get('quarter') or result.get('QuarterName') or result.get('Quarter'),
+        "quarter_period": result.get('quarter_period') or result.get('QuarterPeriod'),
+        "metrics": result.get('metrics') or {result.get('Metric'): result.get('Value')}
+    }
+
+# In your API endpoint:
+normalized_results = [normalize_result(r) for r in results]
+print(normalized_results) 
