@@ -8,8 +8,6 @@ import faiss
 from pathlib import Path
 import logging
 import pdfplumber
-import re
-from datetime import datetime
 from sentence_transformers import SentenceTransformer
 import pickle
 

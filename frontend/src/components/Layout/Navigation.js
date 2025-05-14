@@ -26,7 +26,7 @@ const Navigation = ({ mainTab, subTab, onMainTabChange, onSubTabChange }) => {
     if (subTabs.length > 0 && !subTabs.includes(subTab)) {
       onSubTabChange(subTabs[0]);
     }
-  }, [mainTab]);
+  }, [mainTab, subTab, onSubTabChange]);
 
   return (
     <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>

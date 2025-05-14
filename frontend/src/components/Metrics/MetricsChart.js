@@ -23,7 +23,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
-import { Box, FormControlLabel, Switch } from '@mui/material';
+import { Box} from '@mui/material';
 import { formatDate } from '../../utils/dateFormat';
 import { metricColors } from '../../utils/colors';
 import ExportBar from '../ExportBar'; // adjust path as needed
@@ -33,7 +33,7 @@ import { Chart } from 'chart.js';
 import AIInsightsPanel from '../AIInsights/AIInsightsPanel';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import TimeRangeSlider from './TimeRangeSlider';
+
 
 // Register ChartJS components
 ChartJS.register(

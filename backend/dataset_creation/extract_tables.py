@@ -26,7 +26,7 @@ import camelot
 import tabula
 import pdfplumber
 from thefuzz import process
-import numpy as np
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -307,13 +307,13 @@ def extract_all_metrics(pdf_path, company, table_date):
     # Try Camelot first
     try:
         tables = camelot.read_pdf(pdf_path, pages=str(page_idx+1), flavor='stream')
-    except Exception:
+    except:
         tables = []
     if not tables or not hasattr(tables, 'n') or tables.n == 0:
         try:
             dfs = tabula.read_pdf(pdf_path, pages=page_idx+1, multiple_tables=True, pandas_options={'dtype':str})
             tables = [df for df in dfs if isinstance(df, pd.DataFrame)]
-        except Exception:
+        except:
             tables = []
     # Extract y_label
     with pdfplumber.open(pdf_path) as pdf:

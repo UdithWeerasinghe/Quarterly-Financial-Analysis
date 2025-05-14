@@ -20,18 +20,8 @@ Requirements:
 """
 
 import os
-import json
 import logging
 from pathlib import Path
-import faiss
-import numpy as np
-import requests
-from langchain_ollama.llms import OllamaLLM
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-import pandas as pd
-import pdfplumber
-import pickle
 from backend.llm_driven_query_system.vector_store_creation import create_vector_store
 import re
 

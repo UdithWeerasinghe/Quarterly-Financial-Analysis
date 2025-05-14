@@ -1,17 +1,13 @@
 import React from 'react';
 import { AppBar, Toolbar, Typography, Select, MenuItem, Box, IconButton, Tooltip } from '@mui/material';
 
-const companyNames = {
-  'DIPD': 'DIPPED PRODUCTS PLC',
-  'REXP': 'RICHARD PIERIS EXPORTS PLC'
-};
 
 const companyOptions = [
   { value: 'DIPD', label: 'DIPPED PRODUCTS PLC', logo: '/logos/dipd.jpeg' },
   { value: 'REXP', label: 'RICHARD PIERIS EXPORTS PLC', logo: '/logos/rexp.jpeg' },
 ];
 
-const Header = ({ companies, selectedCompany, onCompanyChange, darkMode, onToggleDarkMode }) => {
+const Header = ({ selectedCompany, onCompanyChange, darkMode, onToggleDarkMode }) => {
   return (
     <AppBar position="static">
       <Toolbar>

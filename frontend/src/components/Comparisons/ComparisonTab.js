@@ -14,7 +14,6 @@ import { Box, CircularProgress, Tabs, Tab, FormControlLabel, Switch } from '@mui
 import ComparisonChart from './ComparisonChart';
 import axios from 'axios';
 import TimeRangeSlider from '../Metrics/TimeRangeSlider';
-import { getQuarterLabel } from '../../utils/dateFormat';
 
 const comparisonPairs = [
   { label: 'Revenue vs. Cost of Goods Sold (COGS)', metrics: ['Revenue', 'COGS'] },
