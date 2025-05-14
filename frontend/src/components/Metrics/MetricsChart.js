@@ -1,3 +1,16 @@
+// MetricsChart.js
+// Renders a time series chart for a selected financial metric of a company.
+// Supports dynamic time range selection, responsive design, and export options.
+//
+// Usage:
+//   <MetricsChart data={data} metric={selectedMetric} company={selectedCompany} onDrilldown={handleDrilldown} />
+//
+// Props:
+//   data (array): Array of financial data objects for the selected company.
+//   metric (string): The financial metric to plot (e.g., 'Revenue').
+//   company (string): The company name or code.
+//   onDrilldown (function): Callback for when a data point is clicked for drilldown.
+
 import React, { useRef, useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import {

@@ -1,3 +1,15 @@
+// App.js
+// Main entry point for the Quarterly Financial Analysis Dashboard frontend.
+// Handles routing, layout, and global state for the React application.
+//
+// Features:
+// - Renders the main dashboard layout and navigation
+// - Integrates all major components (metrics, chat, comparisons, etc.)
+// - Handles global state and API error boundaries
+//
+// Usage:
+//   Place this file at the root of your src/ directory in a React app created with Create React App or Vite.
+
 import React, { useState, useEffect } from 'react';
 import { Container, Box, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import Header from './components/Layout/Header';
@@ -8,7 +20,10 @@ import RatioTab from './components/Ratios/RatioTab';
 import ChatInterface from './components/Chat/ChatInterface';
 import axios from 'axios';
 
-
+/**
+ * App
+ * Main React component for the dashboard. Handles routing and layout.
+ */
 function App() {
   const [companies, setCompanies] = useState([]);
   const [selectedCompany, setSelectedCompany] = useState('');

@@ -1,3 +1,12 @@
+// ChatInterface.js
+// Provides an interactive chat interface for users to ask questions about financial data.
+// Integrates with the backend LLM-powered API for natural language Q&A.
+//
+// Usage:
+//   <ChatInterface darkMode={darkMode} />
+//
+// Props:
+//   darkMode (bool): Whether to use dark mode styling.
 import React, { useState } from 'react';
 import {
   Box,

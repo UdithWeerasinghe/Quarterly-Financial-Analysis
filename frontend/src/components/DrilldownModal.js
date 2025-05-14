@@ -1,3 +1,14 @@
+// DrilldownModal.js
+// Modal component for displaying detailed drilldown information for a selected metric or data point.
+//
+// Usage:
+//   <DrilldownModal open={open} onClose={handleClose} data={drilldownData} />
+//
+// Props:
+//   open (bool): Whether the modal is open.
+//   onClose (function): Callback to close the modal.
+//   data (object): The data to display in the modal.
+
 import React from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, List, ListItem, ListItemText } from '@mui/material';
 import { useTheme } from '@mui/material/styles';

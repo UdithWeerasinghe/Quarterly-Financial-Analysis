@@ -1,3 +1,14 @@
+// RatioTab.js
+// Dashboard tab for displaying a company's financial ratios as interactive charts and controls.
+// Handles ratio selection, time range, and passes data to RatioChart.
+//
+// Usage:
+//   <RatioTab selectedCompany={company} darkMode={darkMode} />
+//
+// Props:
+//   selectedCompany (string): The company to display ratios for.
+//   darkMode (bool): Whether to use dark mode styling.
+
 import React, { useState, useEffect } from 'react';
 import { Box, CircularProgress, Tabs, Tab, FormControlLabel, Switch } from '@mui/material';
 import RatioChart from './RatioChart';

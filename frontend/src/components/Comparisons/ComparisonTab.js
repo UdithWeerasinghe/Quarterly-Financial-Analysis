@@ -1,3 +1,14 @@
+// ComparisonTab.js
+// Dashboard tab for comparing financial metrics between companies as interactive charts and controls.
+// Handles company selection, metric selection, and passes data to ComparisonChart.
+//
+// Usage:
+//   <ComparisonTab selectedCompany={company} darkMode={darkMode} />
+//
+// Props:
+//   selectedCompany (string): The company to compare against others.
+//   darkMode (bool): Whether to use dark mode styling.
+
 import React, { useState, useEffect } from 'react';
 import { Box, CircularProgress, Tabs, Tab, FormControlLabel, Switch } from '@mui/material';
 import ComparisonChart from './ComparisonChart';
@@ -18,6 +29,7 @@ const ComparisonTab = ({ selectedCompany, darkMode }) => {
   const [data, setData] = useState([]);
   const [isAnnual, setIsAnnual] = useState(false);
   const [loading, setLoading] = useState(false);
+  // State for error messages
   const [error, setError] = useState(null);
   const [subTab, setSubTab] = useState(0);
   const yearOptions = Array.from(new Set(data.map(d => new Date(d.TableDate).getFullYear()))).sort();
@@ -33,6 +45,7 @@ const ComparisonTab = ({ selectedCompany, darkMode }) => {
     .sort();
   const [quarterRange, setQuarterRange] = useState([0, Math.max(0, quarterOptions.length - 1)]);
 
+  // Fetch all companies for dropdown
   useEffect(() => {
     const fetchData = async () => {
       if (!selectedCompany) return;

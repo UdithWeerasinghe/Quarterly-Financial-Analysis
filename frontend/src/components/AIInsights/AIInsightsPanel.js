@@ -1,3 +1,16 @@
+// AIInsightsPanel.js
+// Provides AI-generated insights, summaries, or anomaly detection for financial data visualizations.
+// Integrates with the backend or local models to generate context-aware insights for the dashboard.
+//
+// Usage:
+//   <AIInsightsPanel data={data} metric={metric} isAnnual={isAnnual} darkMode={darkMode} />
+//
+// Props:
+//   data (array): Array of financial data objects for the selected metric.
+//   metric (string): The metric being visualized.
+//   isAnnual (bool): Whether the data is annualized.
+//   darkMode (bool): Whether to use dark mode styling.
+
 import React from 'react';
 import { Box, Typography, List, ListItem, ListItemIcon, ListItemText, Paper } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';

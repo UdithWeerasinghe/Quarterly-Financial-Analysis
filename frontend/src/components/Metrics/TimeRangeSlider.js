@@ -1,3 +1,15 @@
+// TimeRangeSlider.js
+// Slider component for selecting a range of years or quarters for chart filtering.
+// Used in the metrics dashboard to allow users to zoom in on a specific time period.
+//
+// Usage:
+//   <TimeRangeSlider options={options} value={range} onChange={setRange} />
+//
+// Props:
+//   options (array): List of string labels for the slider (e.g., years or quarters).
+//   value (array): [startIndex, endIndex] for the selected range.
+//   onChange (function): Callback to update the selected range.
+
 import React from 'react';
 import { Box, Slider } from '@mui/material';
 

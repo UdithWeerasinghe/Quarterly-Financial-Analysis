@@ -1,3 +1,17 @@
+// ComparisonChart.js
+// Renders a line or bar chart comparing a selected financial metric between two companies over time.
+// Used in the comparison dashboard tab to visualize side-by-side trends.
+//
+// Usage:
+//   <ComparisonChart data={data} metric={metric} companyA={companyA} companyB={companyB} darkMode={darkMode} />
+//
+// Props:
+//   data (array): Array of financial data objects for both companies.
+//   metric (string): The financial metric to compare (e.g., 'Revenue').
+//   companyA (string): The first company to compare.
+//   companyB (string): The second company to compare.
+//   darkMode (bool): Whether to use dark mode styling.
+
 import React, { useRef, useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import {

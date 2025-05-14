@@ -1,3 +1,15 @@
+// MetricsTab.js
+// Dashboard tab for displaying a company's financial metrics as interactive charts and controls.
+// Handles metric selection, time range, and passes data to MetricsChart.
+//
+// Usage:
+//   <MetricsTab selectedCompany={company} selectedMetric={metric} darkMode={darkMode} />
+//
+// Props:
+//   selectedCompany (string): The company to display metrics for.
+//   selectedMetric (string): The metric to display (e.g., 'Revenue').
+//   darkMode (bool): Whether to use dark mode styling.
+
 import React, { useState, useEffect } from 'react';
 import { Box, CircularProgress, FormControlLabel, Switch } from '@mui/material';
 import axios from 'axios';

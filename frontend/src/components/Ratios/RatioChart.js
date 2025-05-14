@@ -1,3 +1,15 @@
+// RatioChart.js
+// Renders a line chart for a selected financial ratio of a company over time.
+// Used in the ratios dashboard tab to visualize margin trends.
+//
+// Usage:
+//   <RatioChart data={data} ratio={ratio} company={company} darkMode={darkMode} />
+//
+// Props:
+//   data (array): Array of financial ratio data objects for the company.
+//   ratio (string): The financial ratio to plot (e.g., 'Gross Margin').
+//   company (string): The company name or code.
+//   darkMode (bool): Whether to use dark mode styling.
 import React, { useRef, useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import {
