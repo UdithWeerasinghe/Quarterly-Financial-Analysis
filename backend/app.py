@@ -6,9 +6,10 @@ import sys
 import logging
 import re
 
-# Add the parent directory to Python path
+# Add the parent directory to Python path for module imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Import the RAG pipeline and LLM tools
 from backend.llm_driven_query_system.rag import RAGPipeline
 from langgraph.graph import StateGraph, END
 from langchain_ollama.llms import OllamaLLM
@@ -17,27 +18,32 @@ import uuid
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
-# Set up logging
+# Set up logging for the application
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Initialize Flask app and enable CORS for cross-origin requests
 app = Flask(__name__)
 CORS(app)
 
-# Define base paths
+# Define base paths for data and PDF directories
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BACKEND_DIR, "dataset_creation", "cleaned_data")
 PDF_DIR = os.path.join(BACKEND_DIR, "data_scraping", "pdfs")
 
-# Load and prepare data
+# Load and prepare the cleaned financial data
+# This CSV is expected to be created by the data pipeline
+# and should contain all relevant financial information
+# for the dashboard and chat system
+#
 df = pd.read_csv(os.path.join(DATA_DIR, "cleaned_quarterly_financials.csv"))
 df["TableDate"] = pd.to_datetime(df["TableDate"])
 df = df.sort_values("TableDate")
 
-# Initialize RAG pipeline
+# Initialize the Retrieval-Augmented Generation (RAG) pipeline
 try:
     pipeline = RAGPipeline()
     logger.info("RAG pipeline initialized successfully")
@@ -48,7 +54,7 @@ except Exception as e:
 # Initialize LLM
 llm = OllamaLLM(model="llama3.2:3b")
 
-# Create prompt template for the LLM
+# Create a prompt template for the LLM to ensure consistent, context-aware answers
 prompt_template = PromptTemplate(
     input_variables=["question", "context"],
     template="""You are a helpful financial analyst assistant. Use the following context to answer the question.
@@ -61,17 +67,19 @@ prompt_template = PromptTemplate(
     Answer:"""
 )
 
-# Create LLM chain
+# Create an LLM chain for generating answers
 chain = LLMChain(llm=llm, prompt=prompt_template)
 
-# Define state types
+# Define the state type for the graph-based workflow
 class GraphState(TypedDict):
     query: str
     clarified_query: str
     search_results: List[Any]
     final_response: str
 
-# Define nodes
+# Node: Search for relevant results using the RAG pipeline
+# This node takes a query and returns search results
+
 def search_node(state: GraphState) -> GraphState:
     query = state.get("clarified_query", state["query"])
     results = pipeline.query(query)
@@ -80,6 +88,9 @@ def search_node(state: GraphState) -> GraphState:
         print(f"DEBUG: Result: {r}")
     return {**state, "search_results": results}
 
+# Node: Generate a response using the LLM based on search results
+# This node formats the results and uses the LLM to create a natural language answer
+
 def generate_response_node(state: GraphState) -> GraphState:
     results = state["search_results"]
     query = state.get("clarified_query", state["query"])
@@ -87,7 +98,7 @@ def generate_response_node(state: GraphState) -> GraphState:
     if not results:
         return {**state, "final_response": "Sorry, I couldn't find any relevant information for your question."}
 
-    # Use the same normalize_result function as in your API
+    # Helper function to normalize a result dictionary
     def normalize_result(result):
         metrics = result.get('metrics') or {result.get('Metric'): result.get('Value')}
         metrics_lkr = {k: v * 1000 if v is not None else None for k, v in metrics.items()}
@@ -102,7 +113,7 @@ def generate_response_node(state: GraphState) -> GraphState:
 
     normalized_results = [normalize_result(r) for r in results]
 
-    # Format results for LLM
+    # Format results for LLM context
     context = "\n\n".join([
         f"Company: {r['company']}\n"
         f"Date: {r['date']}\n"
@@ -120,21 +131,22 @@ def generate_response_node(state: GraphState) -> GraphState:
     response = chain.run(question=query, context=context)
     return {**state, "final_response": response}
 
-# Create graph
+# Create a graph workflow for the chat system
 workflow = StateGraph(GraphState)
 
-# Add nodes
+# Add nodes to the workflow
 workflow.add_node("search", search_node)
 workflow.add_node("generate_response", generate_response_node)
 
-# Add edges
+# Define the flow of the workflow
 workflow.add_edge("search", "generate_response")
 workflow.add_edge("generate_response", END)
 workflow.set_entry_point("search")
 
-# Compile graph
+# Compile the workflow graph
 graph = workflow.compile()
 
+# Helper function to normalize a result for API responses
 def normalize_result(result):
     # Get the metrics dictionary (or create one from Metric/Value)
     metrics = result.get('metrics') or {result.get('Metric'): result.get('Value')}
@@ -149,9 +161,10 @@ def normalize_result(result):
         "metrics": metrics_lkr
     }
 
-# At the top of your app.py
+# Dictionary to store user session context for conversational memory
 user_sessions = {}
 
+# API endpoint: Query the chat system with a question
 @app.route("/api/query", methods=["POST"])
 def query():
     session_id = request.json.get("session_id")
@@ -165,12 +178,12 @@ def query():
         if not question:
             return jsonify({'error': 'No question provided'}), 400
         
-        # Run the graph
+        # Run the workflow graph to get results
         result = graph.invoke({"query": question})
         results = result['search_results']
         normalized_results = [normalize_result(r) for r in results]
         
-        # After answering:
+        # Update user session context for follow-up questions
         user_sessions[session_id] = {
             "last_company": normalized_results[0]["company"],
             "last_metric": list(normalized_results[0]["metrics"].keys())[0],
@@ -187,15 +200,18 @@ def query():
         logger.error(f"Error processing query: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# API endpoint: Home page for health check
 @app.route("/")
 def home():
     return "Quarterly Financial Analysis API is running."
 
+# API endpoint: Get list of companies
 @app.route("/api/companies")
 def companies():
     companies = sorted(df["Company"].unique())
     return jsonify(companies)
 
+# API endpoint: Get metrics for a company (quarterly or annual)
 @app.route("/api/metrics")
 def metrics():
     company = request.args.get("company")
@@ -209,6 +225,7 @@ def metrics():
         dff = annual
     return dff.to_json(orient="records", date_format="iso")
 
+# API endpoint: Get comparison data for a company (quarterly or annual)
 @app.route("/api/comparisons")
 def comparisons():
     company = request.args.get("company")
@@ -223,6 +240,7 @@ def comparisons():
         dff = annual
     return dff.to_json(orient="records", date_format="iso")
 
+# API endpoint: Get financial ratios for a company (quarterly or annual)
 @app.route("/api/ratios")
 def ratios():
     company = request.args.get("company")
@@ -247,30 +265,30 @@ def ratios():
         dff["Net Margin"] = dff["Net Income"] / dff["Revenue"] * 100
         return dff[["TableDate", "Gross Margin", "Operating Margin", "Net Margin"]].to_json(orient="records", date_format="iso")
 
+# Helper: Parse a query and extract company, metric, quarter, and year
+# Uses regex and session context for conversational memory
 def parse_query(question, user_context):
-    # Try to extract company, metric, quarter, year from question
-    # If missing, use from user_context
     company = extract_company(question) or user_context.get("last_company")
     metric = extract_metric(question) or user_context.get("last_metric")
     quarter = extract_quarter(question) or user_context.get("last_quarter")
     year = extract_year(question) or user_context.get("last_year")
     return company, metric, quarter, year
 
+# Helper: Extract company name from question using regex
 def extract_company(question):
-    """Extract company name from question."""
     company_match = re.search(r'(REXP|DIPD)', question, re.IGNORECASE)
     return company_match.group().upper() if company_match else None
 
+# Helper: Extract financial metric from question
 def extract_metric(question):
-    """Extract financial metric from question."""
     metrics = ['Revenue', 'COGS', 'Gross Profit', 'Operating Expenses', 'Operating Income', 'Net Income']
     for metric in metrics:
         if metric.lower() in question.lower():
             return metric
     return None
 
+# Helper: Extract quarter information from question
 def extract_quarter(question):
-    """Extract quarter information from question."""
     quarter_match = re.search(r'(1st|2nd|3rd|4th|Q[1-4])', question, re.IGNORECASE)
     if quarter_match:
         quarter = quarter_match.group().capitalize()
@@ -281,11 +299,12 @@ def extract_quarter(question):
         return quarter_map.get(quarter)
     return None
 
+# Helper: Extract year from question
 def extract_year(question):
-    """Extract year from question."""
     year_match = re.search(r'20\d{2}', question)
     return int(year_match.group()) if year_match else None
 
+# API endpoint: Chat interface for the LLM-powered assistant
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
@@ -305,7 +324,7 @@ def chat():
                 'raw_results': []
             })
         
-        # Format context from results
+        # Format context from results for the LLM
         context = []
         for result in results:
             company = result.get('company') or result.get('Company')
@@ -344,9 +363,11 @@ def chat():
             'details': str(e)
         }), 500
 
+# API endpoint: Health check for monitoring
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'healthy'})
 
+# Run the Flask app if this file is executed directly
 if __name__ == "__main__":
     app.run(debug=True)

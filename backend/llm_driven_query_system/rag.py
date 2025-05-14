@@ -1,3 +1,24 @@
+"""
+rag.py
+
+Implements the Retrieval-Augmented Generation (RAG) pipeline for financial document Q&A.
+Combines a vector store for semantic search with a large language model (LLM) for answer generation.
+
+Key Features:
+- Loads a vector store of financial document embeddings for fast semantic search.
+- Extracts relevant context from search results based on user queries.
+- Uses an LLM to generate natural language answers using the retrieved context.
+- Handles company, metric, quarter, and year extraction for precise filtering.
+
+Usage:
+    from rag import RAGPipeline
+    pipeline = RAGPipeline()
+    results = pipeline.query("What was DIPD's Revenue in Q3 2022?")
+
+Requirements:
+    - faiss, numpy, pandas, langchain, langchain_ollama, requests, pdfplumber
+"""
+
 import os
 import json
 import logging
@@ -14,16 +35,20 @@ import pickle
 from backend.llm_driven_query_system.vector_store_creation import create_vector_store
 import re
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Set up logging for the RAG pipeline
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class RAGPipeline:
+    """
+    Retrieval-Augmented Generation pipeline for financial Q&A.
+    Combines a vector store for semantic search with an LLM for answer generation.
+    """
     def __init__(self):
-        """Initialize the RAG pipeline with a vector store."""
+        """
+        Initialize the RAG pipeline with a vector store and LLM.
+        Loads the vector store from disk or creates it if necessary.
+        """
         try:
             # Get module directory
             MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,20 +70,27 @@ class RAGPipeline:
             raise
 
     def query(self, question: str, k: int = 10):
-        """Query the RAG pipeline with a question."""
+        """
+        Query the RAG pipeline with a question.
+        Args:
+            question (str): User's question.
+            k (int): Number of top results to retrieve.
+        Returns:
+            list: List of relevant result dicts.
+        """
         try:
             if not question or not isinstance(question, str):
                 logger.error("Invalid question format")
                 return []
 
-            # Search for relevant documents
+            # Search for relevant documents using the vector store
             results = self.vector_store.search(question, k=k)
             
             if not results:
                 logger.info(f"No results found for query: {question}")
                 return []
             
-            # Try to extract year, quarter, company, and metric from the question
+            # Extract year, quarter, company, and metric from the question using regex
             year_match = re.search(r'20\d{2}', question)
             year = int(year_match.group()) if year_match else None
             quarter_match = re.search(r'(1st|2nd|3rd|4th|Q[1-4])', question, re.IGNORECASE)
@@ -69,7 +101,7 @@ class RAGPipeline:
             metric_match = re.search(r'Revenue|COGS|Gross Profit|Operating Expenses|Operating Income|Net Income', question, re.IGNORECASE)
             metric = metric_match.group() if metric_match else None
 
-            # Post-filter for exact match
+            # Post-filter for exact match on year, quarter, company, and metric
             filtered = []
             for r in results:
                 try:
@@ -93,6 +125,13 @@ class RAGPipeline:
             return []
 
     def normalize_result(self, result):
+        """
+        Normalize a result dictionary for API responses.
+        Args:
+            result (dict): Raw result dict.
+        Returns:
+            dict: Normalized result dict.
+        """
         return {
             "company": result.get('company') or result.get('Company'),
             "date": result.get('date') or result.get('TableDate'),
@@ -103,7 +142,9 @@ class RAGPipeline:
         }
 
 if __name__ == "__main__":
-    # Test the RAG pipeline
+    """
+    Test the RAG pipeline with sample questions and print the results.
+    """
     try:
         pipeline = RAGPipeline()
         test_questions = [
@@ -141,6 +182,6 @@ def normalize_result(result):
         "metrics": result.get('metrics') or {result.get('Metric'): result.get('Value')}
     }
 
-# In your API endpoint:
+# In API endpoint:
 normalized_results = [normalize_result(r) for r in results]
 print(normalized_results) 

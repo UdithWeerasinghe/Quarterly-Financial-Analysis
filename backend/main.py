@@ -1,3 +1,6 @@
+# main.py
+# Entry point for running the full financial analysis pipeline or launching the API server.
+
 import os
 import logging
 from fastapi import FastAPI, HTTPException
@@ -6,8 +9,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from llm_driven_query_system.rag import RAGPipeline
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging for the main entry point
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Define base paths

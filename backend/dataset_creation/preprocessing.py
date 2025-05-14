@@ -15,6 +15,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import logging
+
+# Set up logging for the preprocessing pipeline
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 INPUT_FILE = "backend/dataset_creation/extracted_tables/extracted_quarterly_financials.csv"
 OUTPUT_FILE = "backend/dataset_creation/cleaned_data/cleaned_quarterly_financials.csv"
@@ -89,6 +94,69 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
     df.to_csv(OUTPUT_FILE, index=False)
     print(f"Cleaned/interpolated data saved to {OUTPUT_FILE}")
+
+class Preprocessor:
+    """
+    Cleans and merges extracted financial tables into a single, standardized DataFrame.
+    """
+    def __init__(self, input_dir, output_path):
+        """
+        Initialize the preprocessor with input and output paths.
+        Args:
+            input_dir (str): Directory containing extracted CSV tables.
+            output_path (str): Path to save the cleaned, merged CSV.
+        """
+        self.input_dir = input_dir
+        self.output_path = output_path
+
+    def clean_table(self, df):
+        """
+        Clean a single extracted table DataFrame.
+        Args:
+            df (pd.DataFrame): Raw extracted table.
+        Returns:
+            pd.DataFrame: Cleaned table.
+        """
+        # Example cleaning: drop empty columns, fill missing values, standardize column names
+        df = df.dropna(axis=1, how='all')
+        df = df.fillna(0)
+        df.columns = [col.strip().replace('\n', ' ') for col in df.columns]
+        return df
+
+    def merge_tables(self):
+        """
+        Merge all cleaned tables into a single DataFrame.
+        Returns:
+            pd.DataFrame: Merged DataFrame.
+        """
+        all_tables = []
+        for filename in os.listdir(self.input_dir):
+            if filename.endswith('.csv'):
+                path = os.path.join(self.input_dir, filename)
+                try:
+                    df = pd.read_csv(path)
+                    df = self.clean_table(df)
+                    all_tables.append(df)
+                    logger.info(f"Processed {filename}")
+                except Exception as e:
+                    logger.error(f"Failed to process {filename}: {str(e)}")
+        if all_tables:
+            merged = pd.concat(all_tables, ignore_index=True)
+            return merged
+        else:
+            logger.warning("No tables found to merge.")
+            return pd.DataFrame()
+
+    def run(self):
+        """
+        Run the preprocessing pipeline: clean, merge, and save the final CSV.
+        """
+        merged = self.merge_tables()
+        if not merged.empty:
+            merged.to_csv(self.output_path, index=False)
+            logger.info(f"Saved cleaned data to {self.output_path}")
+        else:
+            logger.warning("No data to save.")
 
 if __name__ == "__main__":
     main() 

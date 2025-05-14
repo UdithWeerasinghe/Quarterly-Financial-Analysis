@@ -1,3 +1,6 @@
+# vector_store_creation.py
+# Creates or loads a vector store for semantic search over financial documents and tables.
+
 import os
 import pandas as pd
 import numpy as np
@@ -18,8 +21,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class FinancialVectorStore:
+    """
+    Vector store for semantic search over financial documents and tables.
+    Uses FAISS for efficient similarity search.
+    """
     def __init__(self, model_name="FinLang/finance-embeddings-investopedia"):
-        """Initialize the vector store with SentenceTransformers."""
+        """
+        Initialize the vector store with SentenceTransformers.
+        Args:
+            model_name (str): Name of the SentenceTransformer model to use.
+        """
         try:
             self.model = SentenceTransformer(model_name)
             self.embedding_dimension = self.model.get_sentence_embedding_dimension()
@@ -38,7 +49,14 @@ class FinancialVectorStore:
             raise
 
     def save(self, index_path=None, metadata_path=None):
-        """Save the FAISS index and metadata to disk."""
+        """
+        Save the FAISS index and metadata to disk.
+        Args:
+            index_path (str, optional): Path to save the FAISS index.
+            metadata_path (str, optional): Path to save the metadata.
+        Returns:
+            bool: True if saving was successful, False otherwise.
+        """
         try:
             if index_path is None:
                 index_path = os.path.join(self.embeddings_dir, "faiss_index.bin")
@@ -63,7 +81,14 @@ class FinancialVectorStore:
             return False
 
     def load(self, index_path=None, metadata_path=None):
-        """Load the FAISS index and metadata from disk."""
+        """
+        Load the FAISS index and metadata from disk.
+        Args:
+            index_path (str, optional): Path to load the FAISS index from.
+            metadata_path (str, optional): Path to load the metadata from.
+        Returns:
+            bool: True if loading was successful, False otherwise.
+        """
         try:
             if index_path is None:
                 index_path = os.path.join(self.embeddings_dir, "faiss_index.bin")
@@ -89,7 +114,13 @@ class FinancialVectorStore:
             return False
 
     def get_embedding(self, text):
-        """Get embedding from SentenceTransformers."""
+        """
+        Get embedding from SentenceTransformers.
+        Args:
+            text (str): Input text to get embedding for.
+        Returns:
+            np.ndarray: Embedding vector for the input text.
+        """
         try:
             return self.model.encode([text])[0]
         except Exception as e:
@@ -97,7 +128,13 @@ class FinancialVectorStore:
             return None
 
     def extract_text_from_pdf(self, pdf_path):
-        """Extract text from PDF and split into chunks."""
+        """
+        Extract text from PDF and split into chunks.
+        Args:
+            pdf_path (str): Path to the PDF file.
+        Returns:
+            list: List of text chunks extracted from the PDF.
+        """
         chunks = []
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -114,7 +151,14 @@ class FinancialVectorStore:
         return chunks
 
     def prepare_text(self, text, metadata=None):
-        """Prepare text for embedding."""
+        """
+        Prepare text for embedding.
+        Args:
+            text (str): Input text to prepare.
+            metadata (dict, optional): Metadata for the text.
+        Returns:
+            str: Prepared text for embedding.
+        """
         if metadata:
             return f"""
             Company: {metadata.get('Company', 'N/A')}
@@ -125,7 +169,11 @@ class FinancialVectorStore:
         return text.strip()
     
     def create_embeddings_from_pdfs(self, pdf_dir):
-        """Create embeddings from PDF files."""
+        """
+        Create embeddings from PDF files.
+        Args:
+            pdf_dir (str or pathlib.Path): Directory containing PDF files.
+        """
         logger.info("Creating embeddings from PDFs...")
         
         pdf_dir = Path(pdf_dir)
@@ -186,7 +234,11 @@ class FinancialVectorStore:
             logger.warning("No text chunks extracted from PDFs")
     
     def create_embeddings_from_csv(self, csv_path):
-        """Create embeddings from CSV data, one per metric per row."""
+        """
+        Create embeddings from CSV data, one per metric per row.
+        Args:
+            csv_path (str): Path to the cleaned CSV file.
+        """
         logger.info("Creating embeddings from CSV...")
         financial_metrics = ['Revenue', 'COGS', 'Gross Profit', 'Operating Expenses', 'Operating Income', 'Net Income']
         try:
@@ -261,7 +313,14 @@ class FinancialVectorStore:
             logger.error(f"Error processing CSV: {str(e)}")
     
     def search(self, query, k=5):
-        """Search for similar financial records."""
+        """
+        Search for similar financial records.
+        Args:
+            query (str): Query text to search for.
+            k (int): Number of results to return.
+        Returns:
+            list: List of metadata dicts for the top-k results.
+        """
         try:
             # Create query embedding
             query_embedding = self.get_embedding(query)
@@ -285,7 +344,15 @@ class FinancialVectorStore:
             return []
 
 def create_vector_store(pdf_dir=None, csv_path=None, force_rebuild=False):
-    """Create and return a vector store from PDF and/or CSV data."""
+    """
+    Create or load a vector store from financial PDFs and CSVs.
+    Args:
+        pdf_dir (str or pathlib.Path, optional): Directory containing PDF files.
+        csv_path (str, optional): Path to the cleaned CSV file.
+        force_rebuild (bool): If True, rebuild the index from scratch.
+    Returns:
+        FinancialVectorStore: The constructed vector store.
+    """
     try:
         vector_store = FinancialVectorStore()
         

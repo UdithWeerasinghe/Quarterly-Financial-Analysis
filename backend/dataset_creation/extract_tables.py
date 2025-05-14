@@ -1,3 +1,22 @@
+"""
+extract_tables.py
+
+Extracts financial tables from downloaded PDFs for CSE-listed companies and saves them as a single CSV file for downstream analysis.
+
+Key Features:
+- Identifies and extracts income statement tables from PDFs using pdfplumber, Camelot, and Tabula.
+- Uses fuzzy matching to map various table row names to standardized financial metrics.
+- Handles company-specific table structures and naming conventions.
+- Outputs a unified CSV with all relevant metrics for each company and quarter.
+
+Usage:
+    python extract_tables.py
+
+Requirements:
+    - pdfplumber, camelot, tabula-py, thefuzz, pandas, numpy
+    - Java (for tabula)
+"""
+
 import os
 import re
 import logging
@@ -62,12 +81,22 @@ num_re = re.compile(r"\(?\d{1,3}(?:,\d{3})*(?:\.\d+)?\)?")
 # Helper functions
 
 def ensure_output_dir():
+    """
+    Ensure the output directory for the extracted CSV exists.
+    """
     out_dir = os.path.dirname(OUTPUT_FILE)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir)
 
 
 def parse_date_from_filename(filename):
+    """
+    Attempt to extract a date from the PDF filename using several common patterns.
+    Args:
+        filename (str): The filename to parse.
+    Returns:
+        date or None: The extracted date, or None if not found.
+    """
     m = re.match(r"(\d{2})_([A-Za-z]{3})_(\d{4})", filename)
     if m:
         try:
@@ -86,6 +115,13 @@ def parse_date_from_filename(filename):
 
 
 def parse_value(val):
+    """
+    Parse a string value from a table cell into a float, handling negatives and parentheses.
+    Args:
+        val (str or float): The value to parse.
+    Returns:
+        float: The parsed value, or 0.0 if not parseable.
+    """
     if pd.isna(val): return 0.0
     s = str(val).replace(',', '').replace(' ', '').replace('\n', '')
     if s.startswith('(') and s.endswith(')'):
@@ -95,6 +131,14 @@ def parse_value(val):
 
 
 def match_metric(desc, company):
+    """
+    Fuzzy match a table row description to a standardized metric for the given company.
+    Args:
+        desc (str): The row description from the table.
+        company (str): The company code (e.g., 'DIPD').
+    Returns:
+        str or None: The matched metric name, or None if not matched.
+    """
     if not isinstance(desc, str): return None
     desc_clean = re.sub(r"[^A-Za-z ]", '', desc).lower()
     best_metric, best_score = None, 0
@@ -112,6 +156,13 @@ def match_metric(desc, company):
 
 
 def find_income_statement_table(pdf_path):
+    """
+    Search all pages of a PDF for a page containing an income statement header.
+    Args:
+        pdf_path (str): Path to the PDF file.
+    Returns:
+        tuple: (page_index, line_index) of the header, or (None, None) if not found.
+    """
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
@@ -124,6 +175,13 @@ def find_income_statement_table(pdf_path):
 
 
 def extract_y_label(header_lines):
+    """
+    Extract the Y-axis label (e.g., currency/units) from header lines near the table.
+    Args:
+        header_lines (list): List of lines near the table header.
+    Returns:
+        str: The extracted Y-label, or empty string if not found.
+    """
     for line in header_lines:
         m = re.search(r"rs\.?[' ]?0{3,}", line, re.IGNORECASE)
         if m:
@@ -132,6 +190,13 @@ def extract_y_label(header_lines):
 
 
 def find_table_date(pdf_path):
+    """
+    Attempt to extract the quarter/period end date from the PDF text.
+    Args:
+        pdf_path (str): Path to the PDF file.
+    Returns:
+        date or None: The detected table date, or None if not found.
+    """
     # Patterns for quarter/period end dates
     QUARTER_ENDS = [(3, 31), (6, 30), (9, 30), (12, 31)]
     TABLE_DATE_RE = re.compile(
@@ -169,6 +234,14 @@ def find_table_date(pdf_path):
 
 
 def parse_page3_metrics(text, company="DIPD"):
+    """
+    Parse metrics from a block of text (usually from DIPD PDFs) using fuzzy matching.
+    Args:
+        text (str): The text block to parse.
+        company (str): The company code.
+    Returns:
+        dict: Dictionary of matched metrics and their values.
+    """
     metrics = {}
     lines = text.splitlines()
     for i, line in enumerate(lines):
@@ -191,6 +264,16 @@ def parse_page3_metrics(text, company="DIPD"):
 
 
 def extract_all_metrics(pdf_path, company, table_date):
+    """
+    Extract all relevant financial metrics from a PDF for a given company and date.
+    Handles both DIPD and REXP table formats.
+    Args:
+        pdf_path (str): Path to the PDF file.
+        company (str): Company code.
+        table_date (date): The detected table date.
+    Returns:
+        tuple: (metrics_dict, y_label)
+    """
     if company == "DIPD":
         # Search all pages for income statement tables
         with pdfplumber.open(pdf_path) as pdf:
@@ -221,16 +304,16 @@ def extract_all_metrics(pdf_path, company, table_date):
     if page_idx is None:
         logging.warning(f"No income statement for {pdf_path}")
         return {k: 0.0 for k in OUTPUT_METRICS}, ""
-    # Try Camelot
+    # Try Camelot first
     try:
         tables = camelot.read_pdf(pdf_path, pages=str(page_idx+1), flavor='stream')
-    except:
+    except Exception:
         tables = []
     if not tables or not hasattr(tables, 'n') or tables.n == 0:
         try:
             dfs = tabula.read_pdf(pdf_path, pages=page_idx+1, multiple_tables=True, pandas_options={'dtype':str})
             tables = [df for df in dfs if isinstance(df, pd.DataFrame)]
-        except:
+        except Exception:
             tables = []
     # Extract y_label
     with pdfplumber.open(pdf_path) as pdf:
@@ -303,6 +386,14 @@ def extract_all_metrics(pdf_path, company, table_date):
 
 
 def calculate_derived_metrics(metrics, company):
+    """
+    Calculate derived metrics (e.g., Operating Expenses, Operating Income) for a company.
+    Args:
+        metrics (dict): Dictionary of base metrics.
+        company (str): Company code.
+    Returns:
+        dict: Updated metrics dictionary with derived values.
+    """
     # Always store absolute values for expenses/costs/COGS
     for key in ["COGS", "Distribution Costs", "Administrative Expenses", "Other Expenses", "Other Operating Expense"]:
         if key in metrics:
@@ -332,6 +423,9 @@ def calculate_derived_metrics(metrics, company):
 
 
 def main():
+    """
+    Main workflow: iterate over all company PDF folders, extract and aggregate metrics, and save to CSV.
+    """
     ensure_output_dir()
     records=[]
     for company in os.listdir(PDF_ROOT):
